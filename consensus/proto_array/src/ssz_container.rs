@@ -1,27 +1,30 @@
 use crate::proto_array::ProposerBoost;
 use crate::{
-    proto_array::{ProtoArray, ProtoNode},
+    proto_array::{ProtoArray, ProtoNodeV17},
     proto_array_fork_choice::{ElasticList, ProtoArrayForkChoice, VoteTracker},
     Error, JustifiedBalances,
 };
 use ssz::{four_byte_option_impl, Encode};
 use ssz_derive::{Decode, Encode};
 use std::collections::HashMap;
-use std::convert::TryFrom;
+use superstruct::superstruct;
 use types::{Checkpoint, Hash256};
 
 // Define a "legacy" implementation of `Option<usize>` which uses four bytes for encoding the union
 // selector.
 four_byte_option_impl!(four_byte_option_checkpoint, Checkpoint);
 
-#[derive(Encode, Decode)]
+pub type SszContainer = SszContainerV17;
+
+#[superstruct(variants(V17), variant_attributes(derive(Encode, Decode)), no_enum)]
 pub struct SszContainer {
     pub votes: Vec<VoteTracker>,
     pub balances: Vec<u64>,
     pub prune_threshold: usize,
     pub justified_checkpoint: Checkpoint,
     pub finalized_checkpoint: Checkpoint,
-    pub nodes: Vec<ProtoNode>,
+    #[superstruct(only(V17))]
+    pub nodes: Vec<ProtoNodeV17>,
     pub indices: Vec<(Hash256, usize)>,
     pub previous_proposer_boost: ProposerBoost,
 }

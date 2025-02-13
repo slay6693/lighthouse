@@ -1,11 +1,10 @@
 use crate::*;
-use eth2_hashing::{hash32_concat, ZERO_HASHES};
+use ethereum_hashing::{hash32_concat, ZERO_HASHES};
 use int_to_bytes::int_to_bytes32;
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use test_random_derive::TestRandom;
 use test_utils::TestRandom;
-use DEPOSIT_TREE_DEPTH;
 
 #[derive(Encode, Decode, Deserialize, Serialize, Clone, Debug, PartialEq, TestRandom)]
 pub struct FinalizedExecutionBlock {
@@ -30,8 +29,10 @@ impl From<&DepositTreeSnapshot> for FinalizedExecutionBlock {
 pub struct DepositTreeSnapshot {
     pub finalized: Vec<Hash256>,
     pub deposit_root: Hash256,
+    #[serde(with = "serde_utils::quoted_u64")]
     pub deposit_count: u64,
     pub execution_block_hash: Hash256,
+    #[serde(with = "serde_utils::quoted_u64")]
     pub execution_block_height: u64,
 }
 
@@ -39,7 +40,7 @@ impl Default for DepositTreeSnapshot {
     fn default() -> Self {
         let mut result = Self {
             finalized: vec![],
-            deposit_root: Hash256::default(),
+            deposit_root: Hash256::zero(),
             deposit_count: 0,
             execution_block_hash: Hash256::zero(),
             execution_block_height: 0,
@@ -59,7 +60,7 @@ impl DepositTreeSnapshot {
         for height in 0..DEPOSIT_TREE_DEPTH {
             deposit_root = if (size & 1) == 1 {
                 index = index.checked_sub(1)?;
-                hash32_concat(self.finalized.get(index)?.as_bytes(), &deposit_root)
+                hash32_concat(self.finalized.get(index)?.as_slice(), &deposit_root)
             } else {
                 hash32_concat(&deposit_root, ZERO_HASHES.get(height)?)
             };

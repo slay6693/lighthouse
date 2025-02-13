@@ -1,38 +1,43 @@
+//! Implementation of [`NetworkBehaviour`] for the [`PeerManager`].
+
+use std::net::IpAddr;
 use std::task::{Context, Poll};
 
 use futures::StreamExt;
+use libp2p::core::transport::PortUse;
 use libp2p::core::ConnectedPoint;
+use libp2p::identity::PeerId;
+use libp2p::multiaddr::Protocol;
 use libp2p::swarm::behaviour::{ConnectionClosed, ConnectionEstablished, DialFailure, FromSwarm};
 use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
 use libp2p::swarm::dummy::ConnectionHandler;
-use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
-use libp2p::PeerId;
-use slog::{debug, error};
+use libp2p::swarm::{ConnectionDenied, ConnectionId, NetworkBehaviour, ToSwarm};
+pub use metrics::{set_gauge_vec, NAT_OPEN};
+use slog::{debug, error, trace};
 use types::EthSpec;
 
-use crate::metrics;
-use crate::rpc::GoodbyeReason;
+use crate::discovery::enr_ext::EnrExt;
 use crate::types::SyncState;
+use crate::{metrics, ClearDialError};
 
-use super::peerdb::BanResult;
-use super::{ConnectingType, PeerManager, PeerManagerEvent, ReportSource};
+use super::{ConnectingType, PeerManager, PeerManagerEvent};
 
-impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
+impl<E: EthSpec> NetworkBehaviour for PeerManager<E> {
     type ConnectionHandler = ConnectionHandler;
-
-    type OutEvent = PeerManagerEvent;
+    type ToSwarm = PeerManagerEvent;
 
     /* Required trait members */
 
-    fn new_handler(&mut self) -> Self::ConnectionHandler {
-        ConnectionHandler
+    fn on_connection_handler_event(
+        &mut self,
+        _peer_id: PeerId,
+        _connection_id: ConnectionId,
+        _event: libp2p::swarm::THandlerOutEvent<Self>,
+    ) {
+        // no events from the dummy handler
     }
 
-    fn poll(
-        &mut self,
-        cx: &mut Context<'_>,
-        _params: &mut impl PollParameters,
-    ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<ToSwarm<Self::ToSwarm, void::Void>> {
         // perform the heartbeat when necessary
         while self.heartbeat.poll_tick(cx).is_ready() {
             self.heartbeat();
@@ -84,26 +89,36 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
         }
 
         if !self.events.is_empty() {
-            return Poll::Ready(NetworkBehaviourAction::GenerateEvent(self.events.remove(0)));
+            return Poll::Ready(ToSwarm::GenerateEvent(self.events.remove(0)));
         } else {
             self.events.shrink_to_fit();
         }
 
-        if let Some((peer_id, maybe_enr)) = self.peers_to_dial.pop_first() {
-            self.inject_peer_connection(&peer_id, ConnectingType::Dialing, maybe_enr);
-            let handler = self.new_handler();
-            return Poll::Ready(NetworkBehaviourAction::Dial {
-                opts: DialOpts::peer_id(peer_id)
+        if let Some(enr) = self.peers_to_dial.pop() {
+            self.inject_peer_connection(&enr.peer_id(), ConnectingType::Dialing, Some(enr.clone()));
+
+            // Prioritize Quic connections over Tcp ones.
+            let multiaddrs = [
+                self.quic_enabled
+                    .then_some(enr.multiaddr_quic())
+                    .unwrap_or_default(),
+                enr.multiaddr_tcp(),
+            ]
+            .concat();
+
+            debug!(self.log, "Dialing peer"; "peer_id"=> %enr.peer_id(), "multiaddrs" => ?multiaddrs);
+            return Poll::Ready(ToSwarm::Dial {
+                opts: DialOpts::peer_id(enr.peer_id())
                     .condition(PeerCondition::Disconnected)
+                    .addresses(multiaddrs)
                     .build(),
-                handler,
             });
         }
 
         Poll::Pending
     }
 
-    fn on_swarm_event(&mut self, event: FromSwarm<Self::ConnectionHandler>) {
+    fn on_swarm_event(&mut self, event: FromSwarm) {
         match event {
             FromSwarm::ConnectionEstablished(ConnectionEstablished {
                 peer_id,
@@ -113,67 +128,71 @@ impl<TSpec: EthSpec> NetworkBehaviour for PeerManager<TSpec> {
             }) => self.on_connection_established(peer_id, endpoint, other_established),
             FromSwarm::ConnectionClosed(ConnectionClosed {
                 peer_id,
+                endpoint,
+
                 remaining_established,
                 ..
-            }) => self.on_connection_closed(peer_id, remaining_established),
-            FromSwarm::DialFailure(DialFailure { peer_id, .. }) => self.on_dial_failure(peer_id),
-            FromSwarm::AddressChange(_)
-            | FromSwarm::ListenFailure(_)
-            | FromSwarm::NewListener(_)
-            | FromSwarm::NewListenAddr(_)
-            | FromSwarm::ExpiredListenAddr(_)
-            | FromSwarm::ListenerError(_)
-            | FromSwarm::ListenerClosed(_)
-            | FromSwarm::NewExternalAddr(_)
-            | FromSwarm::ExpiredExternalAddr(_) => {
+            }) => self.on_connection_closed(peer_id, endpoint, remaining_established),
+            FromSwarm::DialFailure(DialFailure {
+                peer_id,
+                error,
+                connection_id: _,
+            }) => {
+                debug!(self.log, "Failed to dial peer"; "peer_id"=> ?peer_id, "error" => %ClearDialError(error));
+                self.on_dial_failure(peer_id);
+            }
+            _ => {
+                // NOTE: FromSwarm is a non exhaustive enum so updates should be based on release
+                // notes more than compiler feedback
                 // The rest of the events we ignore since they are handled in their associated
                 // `SwarmEvent`
             }
         }
     }
-}
 
-impl<TSpec: EthSpec> PeerManager<TSpec> {
-    fn on_connection_established(
+    fn handle_pending_inbound_connection(
         &mut self,
+        _connection_id: ConnectionId,
+        _local_addr: &libp2p::Multiaddr,
+        remote_addr: &libp2p::Multiaddr,
+    ) -> Result<(), ConnectionDenied> {
+        // get the IP address to verify it's not banned.
+        let ip = match remote_addr.iter().next() {
+            Some(Protocol::Ip6(ip)) => IpAddr::V6(ip),
+            Some(Protocol::Ip4(ip)) => IpAddr::V4(ip),
+            _ => {
+                return Err(ConnectionDenied::new(format!(
+                    "Connection to peer rejected: invalid multiaddr: {remote_addr}"
+                )))
+            }
+        };
+
+        if self.network_globals.peers.read().is_ip_banned(&ip) {
+            return Err(ConnectionDenied::new(format!(
+                "Connection to peer rejected: peer {ip} is banned"
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn handle_established_inbound_connection(
+        &mut self,
+        _connection_id: ConnectionId,
         peer_id: PeerId,
-        endpoint: &ConnectedPoint,
-        other_established: usize,
-    ) {
-        debug!(self.log, "Connection established"; "peer_id" => %peer_id, "connection" => ?endpoint.to_endpoint());
-        if other_established == 0 {
-            self.events.push(PeerManagerEvent::MetaData(peer_id));
+        _local_addr: &libp2p::Multiaddr,
+        remote_addr: &libp2p::Multiaddr,
+    ) -> Result<libp2p::swarm::THandler<Self>, ConnectionDenied> {
+        trace!(self.log, "Inbound connection"; "peer_id" => %peer_id, "multiaddr" => %remote_addr);
+        // We already checked if the peer was banned on `handle_pending_inbound_connection`.
+        if self.ban_status(&peer_id).is_some() {
+            return Err(ConnectionDenied::new(
+                "Connection to peer rejected: peer has a bad score",
+            ));
         }
 
-        // Check NAT if metrics are enabled
-        if self.network_globals.local_enr.read().udp4().is_some() {
-            metrics::check_nat();
-        }
-
-        // Check to make sure the peer is not supposed to be banned
-        match self.ban_status(&peer_id) {
-            // TODO: directly emit the ban event?
-            BanResult::BadScore => {
-                // This is a faulty state
-                error!(self.log, "Connected to a banned peer. Re-banning"; "peer_id" => %peer_id);
-                // Reban the peer
-                self.goodbye_peer(&peer_id, GoodbyeReason::Banned, ReportSource::PeerManager);
-                return;
-            }
-            BanResult::BannedIp(ip_addr) => {
-                // A good peer has connected to us via a banned IP address. We ban the peer and
-                // prevent future connections.
-                debug!(self.log, "Peer connected via banned IP. Banning"; "peer_id" => %peer_id, "banned_ip" => %ip_addr);
-                self.goodbye_peer(&peer_id, GoodbyeReason::BannedIP, ReportSource::PeerManager);
-                return;
-            }
-            BanResult::NotBanned => {}
-        }
-
-        // Count dialing peers in the limit if the peer dialed us.
-        let count_dialing = endpoint.is_listener();
         // Check the connection limits
-        if self.peer_limit_reached(count_dialing)
+        if self.network_globals.connected_or_dialing_peers() >= self.max_peers()
             && self
                 .network_globals
                 .peers
@@ -181,9 +200,71 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
                 .peer_info(&peer_id)
                 .map_or(true, |peer| !peer.has_future_duty())
         {
-            // Gracefully disconnect the peer.
-            self.disconnect_peer(peer_id, GoodbyeReason::TooManyPeers);
-            return;
+            return Err(ConnectionDenied::new(
+                "Connection to peer rejected: too many connections",
+            ));
+        }
+
+        // We have an inbound connection, this is indicative of having our libp2p NAT ports open. We
+        // distinguish between ipv4 and ipv6 here:
+        match remote_addr.iter().next() {
+            Some(Protocol::Ip4(_)) => set_gauge_vec(&NAT_OPEN, &["libp2p_ipv4"], 1),
+            Some(Protocol::Ip6(_)) => set_gauge_vec(&NAT_OPEN, &["libp2p_ipv6"], 1),
+            _ => {}
+        }
+
+        Ok(ConnectionHandler)
+    }
+
+    fn handle_established_outbound_connection(
+        &mut self,
+        _connection_id: ConnectionId,
+        peer_id: PeerId,
+        addr: &libp2p::Multiaddr,
+        _role_override: libp2p::core::Endpoint,
+        _port_use: PortUse,
+    ) -> Result<libp2p::swarm::THandler<Self>, libp2p::swarm::ConnectionDenied> {
+        trace!(self.log, "Outbound connection"; "peer_id" => %peer_id, "multiaddr" => %addr);
+        if let Some(cause) = self.ban_status(&peer_id) {
+            error!(self.log, "Connected a banned peer. Rejecting connection"; "peer_id" => %peer_id);
+            return Err(ConnectionDenied::new(cause));
+        }
+
+        // Check the connection limits
+        if self.network_globals.connected_peers() >= self.max_outbound_dialing_peers()
+            && self
+                .network_globals
+                .peers
+                .read()
+                .peer_info(&peer_id)
+                .map_or(true, |peer| !peer.has_future_duty())
+        {
+            return Err(ConnectionDenied::new(
+                "Connection to peer rejected: too many connections",
+            ));
+        }
+
+        Ok(ConnectionHandler)
+    }
+}
+
+impl<E: EthSpec> PeerManager<E> {
+    fn on_connection_established(
+        &mut self,
+        peer_id: PeerId,
+        endpoint: &ConnectedPoint,
+        _other_established: usize,
+    ) {
+        debug!(self.log, "Connection established"; "peer_id" => %peer_id,
+            "multiaddr" => %endpoint.get_remote_address(),
+            "connection" => ?endpoint.to_endpoint()
+        );
+
+        // Update the prometheus metrics
+        if self.metrics_enabled {
+            metrics::inc_counter(&metrics::PEER_CONNECT_EVENT_COUNT);
+
+            self.update_peer_count_metrics();
         }
 
         // NOTE: We don't register peers that we are disconnecting immediately. The network service
@@ -199,14 +280,15 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
                 self.events
                     .push(PeerManagerEvent::PeerConnectedOutgoing(peer_id));
             }
-        }
-
-        // increment prometheus metrics
-        self.update_connected_peer_metrics();
-        metrics::inc_counter(&metrics::PEER_CONNECT_EVENT_COUNT);
+        };
     }
 
-    fn on_connection_closed(&mut self, peer_id: PeerId, remaining_established: usize) {
+    fn on_connection_closed(
+        &mut self,
+        peer_id: PeerId,
+        _endpoint: &ConnectedPoint,
+        remaining_established: usize,
+    ) {
         if remaining_established > 0 {
             return;
         }
@@ -233,8 +315,12 @@ impl<TSpec: EthSpec> PeerManager<TSpec> {
         self.inject_disconnect(&peer_id);
 
         // Update the prometheus metrics
-        self.update_connected_peer_metrics();
-        metrics::inc_counter(&metrics::PEER_DISCONNECT_EVENT_COUNT);
+        if self.metrics_enabled {
+            // Legacy standard metrics.
+            metrics::inc_counter(&metrics::PEER_DISCONNECT_EVENT_COUNT);
+
+            self.update_peer_count_metrics();
+        }
     }
 
     /// A dial attempt has failed.

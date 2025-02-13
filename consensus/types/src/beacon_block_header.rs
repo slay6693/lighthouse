@@ -1,7 +1,7 @@
 use crate::test_utils::TestRandom;
 use crate::*;
 
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use test_random_derive::TestRandom;
 use tree_hash::TreeHash;
@@ -26,7 +26,7 @@ use tree_hash_derive::TreeHash;
 )]
 pub struct BeaconBlockHeader {
     pub slot: Slot,
-    #[serde(with = "eth2_serde_utils::quoted_u64")]
+    #[serde(with = "serde_utils::quoted_u64")]
     pub proposer_index: u64,
     pub parent_root: Hash256,
     pub state_root: Hash256,
@@ -58,6 +58,16 @@ impl BeaconBlockHeader {
         SignedBeaconBlockHeader {
             message: self,
             signature,
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            body_root: Default::default(),
+            parent_root: Default::default(),
+            proposer_index: Default::default(),
+            slot: Default::default(),
+            state_root: Default::default(),
         }
     }
 }

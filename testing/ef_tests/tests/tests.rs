@@ -14,6 +14,10 @@ fn check_typenum_values<E: EthSpec>() {
         E::SlotsPerEth1VotingPeriod::to_u64(),
         E::EpochsPerEth1VotingPeriod::to_u64() * E::SlotsPerEpoch::to_u64()
     );
+    assert_eq!(
+        E::MaxValidatorsPerSlot::to_u64(),
+        E::MaxCommitteesPerSlot::to_u64() * E::MaxValidatorsPerCommittee::to_u64()
+    );
 }
 
 #[test]
@@ -72,20 +76,39 @@ fn operations_sync_aggregate() {
 
 #[test]
 fn operations_execution_payload_full() {
-    OperationsHandler::<MinimalEthSpec, FullPayload<_>>::default().run();
-    OperationsHandler::<MainnetEthSpec, FullPayload<_>>::default().run();
+    OperationsHandler::<MinimalEthSpec, BeaconBlockBody<_, FullPayload<_>>>::default().run();
+    OperationsHandler::<MainnetEthSpec, BeaconBlockBody<_, FullPayload<_>>>::default().run();
 }
 
 #[test]
 fn operations_execution_payload_blinded() {
-    OperationsHandler::<MinimalEthSpec, BlindedPayload<_>>::default().run();
-    OperationsHandler::<MainnetEthSpec, BlindedPayload<_>>::default().run();
+    OperationsHandler::<MinimalEthSpec, BeaconBlockBody<_, BlindedPayload<_>>>::default().run();
+    OperationsHandler::<MainnetEthSpec, BeaconBlockBody<_, BlindedPayload<_>>>::default().run();
 }
 
 #[test]
 fn operations_withdrawals() {
     OperationsHandler::<MinimalEthSpec, WithdrawalsPayload<_>>::default().run();
     OperationsHandler::<MainnetEthSpec, WithdrawalsPayload<_>>::default().run();
+}
+
+#[test]
+fn operations_withdrawal_reqeusts() {
+    OperationsHandler::<MinimalEthSpec, WithdrawalRequest>::default().run();
+    OperationsHandler::<MainnetEthSpec, WithdrawalRequest>::default().run();
+}
+
+#[test]
+#[cfg(not(feature = "fake_crypto"))]
+fn operations_deposit_requests() {
+    OperationsHandler::<MinimalEthSpec, DepositRequest>::default().run();
+    OperationsHandler::<MainnetEthSpec, DepositRequest>::default().run();
+}
+
+#[test]
+fn operations_consolidations() {
+    OperationsHandler::<MinimalEthSpec, ConsolidationRequest>::default().run();
+    OperationsHandler::<MainnetEthSpec, ConsolidationRequest>::default().run();
 }
 
 #[test]
@@ -214,14 +237,17 @@ macro_rules! ssz_static_test_no_run {
 
 #[cfg(feature = "fake_crypto")]
 mod ssz_static {
-    use ef_tests::{Handler, SszStaticHandler, SszStaticTHCHandler, SszStaticWithSpecHandler};
+    use ef_tests::{
+        FeatureName, Handler, SszStaticHandler, SszStaticTHCHandler, SszStaticWithSpecHandler,
+    };
     use types::historical_summary::HistoricalSummary;
-    use types::*;
+    use types::{
+        AttesterSlashingBase, AttesterSlashingElectra, ConsolidationRequest, DepositRequest,
+        LightClientBootstrapAltair, PendingBalanceDeposit, PendingPartialWithdrawal,
+        WithdrawalRequest, *,
+    };
 
-    ssz_static_test!(aggregate_and_proof, AggregateAndProof<_>);
-    ssz_static_test!(attestation, Attestation<_>);
     ssz_static_test!(attestation_data, AttestationData);
-    ssz_static_test!(attester_slashing, AttesterSlashing<_>);
     ssz_static_test!(beacon_block, SszStaticWithSpecHandler, BeaconBlock<_>);
     ssz_static_test!(beacon_block_header, BeaconBlockHeader);
     ssz_static_test!(beacon_state, SszStaticTHCHandler, BeaconState<_>);
@@ -234,11 +260,8 @@ mod ssz_static {
     ssz_static_test!(fork, Fork);
     ssz_static_test!(fork_data, ForkData);
     ssz_static_test!(historical_batch, HistoricalBatch<_>);
-    ssz_static_test!(indexed_attestation, IndexedAttestation<_>);
-    // NOTE: LightClient* intentionally omitted
     ssz_static_test!(pending_attestation, PendingAttestation<_>);
     ssz_static_test!(proposer_slashing, ProposerSlashing);
-    ssz_static_test!(signed_aggregate_and_proof, SignedAggregateAndProof<_>);
     ssz_static_test!(
         signed_beacon_block,
         SszStaticWithSpecHandler,
@@ -250,6 +273,70 @@ mod ssz_static {
     ssz_static_test!(validator, Validator);
     ssz_static_test!(voluntary_exit, VoluntaryExit);
 
+    #[test]
+    fn attestation() {
+        SszStaticHandler::<AttestationBase<MinimalEthSpec>, MinimalEthSpec>::pre_electra().run();
+        SszStaticHandler::<AttestationBase<MainnetEthSpec>, MainnetEthSpec>::pre_electra().run();
+        SszStaticHandler::<AttestationElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only()
+            .run();
+        SszStaticHandler::<AttestationElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only()
+            .run();
+    }
+
+    #[test]
+    fn attester_slashing() {
+        SszStaticHandler::<AttesterSlashingBase<MinimalEthSpec>, MinimalEthSpec>::pre_electra()
+            .run();
+        SszStaticHandler::<AttesterSlashingBase<MainnetEthSpec>, MainnetEthSpec>::pre_electra()
+            .run();
+        SszStaticHandler::<AttesterSlashingElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only()
+            .run();
+        SszStaticHandler::<AttesterSlashingElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only()
+            .run();
+    }
+
+    #[test]
+    fn indexed_attestation() {
+        SszStaticHandler::<IndexedAttestationBase<MinimalEthSpec>, MinimalEthSpec>::pre_electra()
+            .run();
+        SszStaticHandler::<IndexedAttestationBase<MainnetEthSpec>, MainnetEthSpec>::pre_electra()
+            .run();
+        SszStaticHandler::<IndexedAttestationElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only()
+            .run();
+        SszStaticHandler::<IndexedAttestationElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only()
+            .run();
+    }
+
+    #[test]
+    fn signed_aggregate_and_proof() {
+        SszStaticHandler::<SignedAggregateAndProofBase<MinimalEthSpec>, MinimalEthSpec>::pre_electra(
+        )
+        .run();
+        SszStaticHandler::<SignedAggregateAndProofBase<MainnetEthSpec>, MainnetEthSpec>::pre_electra(
+        )
+        .run();
+        SszStaticHandler::<SignedAggregateAndProofElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only(
+        )
+        .run();
+        SszStaticHandler::<SignedAggregateAndProofElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only(
+        )
+        .run();
+    }
+
+    #[test]
+    fn aggregate_and_proof() {
+        SszStaticHandler::<AggregateAndProofBase<MinimalEthSpec>, MinimalEthSpec>::pre_electra()
+            .run();
+        SszStaticHandler::<AggregateAndProofBase<MainnetEthSpec>, MainnetEthSpec>::pre_electra()
+            .run();
+        SszStaticHandler::<AggregateAndProofElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only(
+        )
+        .run();
+        SszStaticHandler::<AggregateAndProofElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only(
+        )
+        .run();
+    }
+
     // BeaconBlockBody has no internal indicator of which fork it is for, so we test it separately.
     #[test]
     fn beacon_block_body() {
@@ -259,13 +346,21 @@ mod ssz_static {
             .run();
         SszStaticHandler::<BeaconBlockBodyAltair<MainnetEthSpec>, MainnetEthSpec>::altair_only()
             .run();
-        SszStaticHandler::<BeaconBlockBodyMerge<MinimalEthSpec>, MinimalEthSpec>::merge_only()
+        SszStaticHandler::<BeaconBlockBodyBellatrix<MinimalEthSpec>, MinimalEthSpec>::bellatrix_only()
             .run();
-        SszStaticHandler::<BeaconBlockBodyMerge<MainnetEthSpec>, MainnetEthSpec>::merge_only()
+        SszStaticHandler::<BeaconBlockBodyBellatrix<MainnetEthSpec>, MainnetEthSpec>::bellatrix_only()
             .run();
         SszStaticHandler::<BeaconBlockBodyCapella<MinimalEthSpec>, MinimalEthSpec>::capella_only()
             .run();
         SszStaticHandler::<BeaconBlockBodyCapella<MainnetEthSpec>, MainnetEthSpec>::capella_only()
+            .run();
+        SszStaticHandler::<BeaconBlockBodyDeneb<MinimalEthSpec>, MinimalEthSpec>::deneb_only()
+            .run();
+        SszStaticHandler::<BeaconBlockBodyDeneb<MainnetEthSpec>, MainnetEthSpec>::deneb_only()
+            .run();
+        SszStaticHandler::<BeaconBlockBodyElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only()
+            .run();
+        SszStaticHandler::<BeaconBlockBodyElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only()
             .run();
     }
 
@@ -276,6 +371,143 @@ mod ssz_static {
         )
         .run();
         SszStaticHandler::<ContributionAndProof<MainnetEthSpec>, MainnetEthSpec>::altair_and_later(
+        )
+        .run();
+    }
+
+    // LightClientBootstrap has no internal indicator of which fork it is for, so we test it separately.
+    #[test]
+    fn light_client_bootstrap() {
+        SszStaticHandler::<LightClientBootstrapAltair<MinimalEthSpec>, MinimalEthSpec>::altair_only()
+            .run();
+        SszStaticHandler::<LightClientBootstrapAltair<MainnetEthSpec>, MainnetEthSpec>::altair_only()
+            .run();
+        SszStaticHandler::<LightClientBootstrapAltair<MinimalEthSpec>, MinimalEthSpec>::bellatrix_only(
+        )
+        .run();
+        SszStaticHandler::<LightClientBootstrapAltair<MainnetEthSpec>, MainnetEthSpec>::bellatrix_only(
+        )
+        .run();
+        SszStaticHandler::<LightClientBootstrapCapella<MinimalEthSpec>, MinimalEthSpec>::capella_only()
+            .run();
+        SszStaticHandler::<LightClientBootstrapCapella<MainnetEthSpec>, MainnetEthSpec>::capella_only()
+            .run();
+        SszStaticHandler::<LightClientBootstrapDeneb<MinimalEthSpec>, MinimalEthSpec>::deneb_only()
+            .run();
+        SszStaticHandler::<LightClientBootstrapDeneb<MainnetEthSpec>, MainnetEthSpec>::deneb_only()
+            .run();
+        SszStaticHandler::<LightClientBootstrapElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only()
+            .run();
+        SszStaticHandler::<LightClientBootstrapElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only()
+            .run();
+    }
+
+    // LightClientHeader has no internal indicator of which fork it is for, so we test it separately.
+    #[test]
+    fn light_client_header() {
+        SszStaticHandler::<LightClientHeaderAltair<MinimalEthSpec>, MinimalEthSpec>::altair_only()
+            .run();
+        SszStaticHandler::<LightClientHeaderAltair<MainnetEthSpec>, MainnetEthSpec>::altair_only()
+            .run();
+        SszStaticHandler::<LightClientHeaderAltair<MinimalEthSpec>, MinimalEthSpec>::bellatrix_only()
+            .run();
+        SszStaticHandler::<LightClientHeaderAltair<MainnetEthSpec>, MainnetEthSpec>::bellatrix_only()
+            .run();
+
+        SszStaticHandler::<LightClientHeaderCapella<MinimalEthSpec>, MinimalEthSpec>::capella_only(
+        )
+        .run();
+        SszStaticHandler::<LightClientHeaderCapella<MainnetEthSpec>, MainnetEthSpec>::capella_only(
+        )
+        .run();
+
+        SszStaticHandler::<LightClientHeaderDeneb<MinimalEthSpec>, MinimalEthSpec>::deneb_only()
+            .run();
+        SszStaticHandler::<LightClientHeaderDeneb<MainnetEthSpec>, MainnetEthSpec>::deneb_only()
+            .run();
+        SszStaticHandler::<LightClientHeaderElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only(
+        )
+        .run();
+        SszStaticHandler::<LightClientHeaderElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only(
+        )
+        .run();
+    }
+
+    // LightClientOptimisticUpdate has no internal indicator of which fork it is for, so we test it separately.
+    #[test]
+    fn light_client_optimistic_update() {
+        SszStaticHandler::<LightClientOptimisticUpdateAltair<MinimalEthSpec>, MinimalEthSpec>::altair_only().run();
+        SszStaticHandler::<LightClientOptimisticUpdateAltair<MainnetEthSpec>, MainnetEthSpec>::altair_only().run();
+        SszStaticHandler::<LightClientOptimisticUpdateAltair<MinimalEthSpec>, MinimalEthSpec>::bellatrix_only().run();
+        SszStaticHandler::<LightClientOptimisticUpdateAltair<MainnetEthSpec>, MainnetEthSpec>::bellatrix_only().run();
+        SszStaticHandler::<LightClientOptimisticUpdateCapella<MinimalEthSpec>, MinimalEthSpec>::capella_only().run();
+        SszStaticHandler::<LightClientOptimisticUpdateCapella<MainnetEthSpec>, MainnetEthSpec>::capella_only().run();
+        SszStaticHandler::<LightClientOptimisticUpdateDeneb<MinimalEthSpec>, MinimalEthSpec>::deneb_only().run();
+        SszStaticHandler::<LightClientOptimisticUpdateDeneb<MainnetEthSpec>, MainnetEthSpec>::deneb_only().run();
+        SszStaticHandler::<LightClientOptimisticUpdateElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only().run();
+        SszStaticHandler::<LightClientOptimisticUpdateElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only().run();
+    }
+
+    // LightClientFinalityUpdate has no internal indicator of which fork it is for, so we test it separately.
+    #[test]
+    fn light_client_finality_update() {
+        SszStaticHandler::<LightClientFinalityUpdateAltair<MinimalEthSpec>, MinimalEthSpec>::altair_only(
+        )
+            .run();
+        SszStaticHandler::<LightClientFinalityUpdateAltair<MainnetEthSpec>, MainnetEthSpec>::altair_only(
+        )
+            .run();
+        SszStaticHandler::<LightClientFinalityUpdateAltair<MinimalEthSpec>, MinimalEthSpec>::bellatrix_only(
+        )
+            .run();
+        SszStaticHandler::<LightClientFinalityUpdateAltair<MainnetEthSpec>, MainnetEthSpec>::bellatrix_only(
+        )
+            .run();
+        SszStaticHandler::<LightClientFinalityUpdateCapella<MinimalEthSpec>, MinimalEthSpec>::capella_only(
+        )
+            .run();
+        SszStaticHandler::<LightClientFinalityUpdateCapella<MainnetEthSpec>, MainnetEthSpec>::capella_only(
+        )
+            .run();
+        SszStaticHandler::<LightClientFinalityUpdateDeneb<MinimalEthSpec>, MinimalEthSpec>::deneb_only(
+        )
+            .run();
+        SszStaticHandler::<LightClientFinalityUpdateDeneb<MainnetEthSpec>, MainnetEthSpec>::deneb_only(
+        )
+            .run();
+        SszStaticHandler::<LightClientFinalityUpdateElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only(
+        )
+            .run();
+        SszStaticHandler::<LightClientFinalityUpdateElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only(
+        )
+            .run();
+    }
+
+    // LightClientUpdate has no internal indicator of which fork it is for, so we test it separately.
+    #[test]
+    fn light_client_update() {
+        SszStaticHandler::<LightClientUpdateAltair<MinimalEthSpec>, MinimalEthSpec>::altair_only()
+            .run();
+        SszStaticHandler::<LightClientUpdateAltair<MainnetEthSpec>, MainnetEthSpec>::altair_only()
+            .run();
+        SszStaticHandler::<LightClientUpdateAltair<MinimalEthSpec>, MinimalEthSpec>::bellatrix_only()
+            .run();
+        SszStaticHandler::<LightClientUpdateAltair<MainnetEthSpec>, MainnetEthSpec>::bellatrix_only()
+            .run();
+        SszStaticHandler::<LightClientUpdateCapella<MinimalEthSpec>, MinimalEthSpec>::capella_only(
+        )
+        .run();
+        SszStaticHandler::<LightClientUpdateCapella<MainnetEthSpec>, MainnetEthSpec>::capella_only(
+        )
+        .run();
+        SszStaticHandler::<LightClientUpdateDeneb<MinimalEthSpec>, MinimalEthSpec>::deneb_only()
+            .run();
+        SszStaticHandler::<LightClientUpdateDeneb<MainnetEthSpec>, MainnetEthSpec>::deneb_only()
+            .run();
+        SszStaticHandler::<LightClientUpdateElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only(
+        )
+        .run();
+        SszStaticHandler::<LightClientUpdateElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only(
         )
         .run();
     }
@@ -316,53 +548,141 @@ mod ssz_static {
         SszStaticHandler::<SyncAggregatorSelectionData, MainnetEthSpec>::altair_and_later().run();
     }
 
-    // Merge and later
+    // Bellatrix and later
     #[test]
     fn execution_payload() {
-        SszStaticHandler::<ExecutionPayloadMerge<MinimalEthSpec>, MinimalEthSpec>::merge_only()
+        SszStaticHandler::<ExecutionPayloadBellatrix<MinimalEthSpec>, MinimalEthSpec>::bellatrix_only()
             .run();
-        SszStaticHandler::<ExecutionPayloadMerge<MainnetEthSpec>, MainnetEthSpec>::merge_only()
+        SszStaticHandler::<ExecutionPayloadBellatrix<MainnetEthSpec>, MainnetEthSpec>::bellatrix_only()
             .run();
         SszStaticHandler::<ExecutionPayloadCapella<MinimalEthSpec>, MinimalEthSpec>::capella_only()
             .run();
         SszStaticHandler::<ExecutionPayloadCapella<MainnetEthSpec>, MainnetEthSpec>::capella_only()
             .run();
+        SszStaticHandler::<ExecutionPayloadDeneb<MinimalEthSpec>, MinimalEthSpec>::deneb_only()
+            .run();
+        SszStaticHandler::<ExecutionPayloadDeneb<MainnetEthSpec>, MainnetEthSpec>::deneb_only()
+            .run();
+        SszStaticHandler::<ExecutionPayloadElectra<MinimalEthSpec>, MinimalEthSpec>::electra_only()
+            .run();
+        SszStaticHandler::<ExecutionPayloadElectra<MainnetEthSpec>, MainnetEthSpec>::electra_only()
+            .run();
     }
 
     #[test]
     fn execution_payload_header() {
-        SszStaticHandler::<ExecutionPayloadHeaderMerge<MinimalEthSpec>, MinimalEthSpec>::merge_only()
+        SszStaticHandler::<ExecutionPayloadHeaderBellatrix<MinimalEthSpec>, MinimalEthSpec>::bellatrix_only()
             .run();
-        SszStaticHandler::<ExecutionPayloadHeaderMerge<MainnetEthSpec>, MainnetEthSpec>::merge_only()
+        SszStaticHandler::<ExecutionPayloadHeaderBellatrix<MainnetEthSpec>, MainnetEthSpec>::bellatrix_only()
             .run();
         SszStaticHandler::<ExecutionPayloadHeaderCapella<MinimalEthSpec>, MinimalEthSpec>
             ::capella_only().run();
         SszStaticHandler::<ExecutionPayloadHeaderCapella<MainnetEthSpec>, MainnetEthSpec>
             ::capella_only().run();
+        SszStaticHandler::<ExecutionPayloadHeaderDeneb<MinimalEthSpec>, MinimalEthSpec>
+            ::deneb_only().run();
+        SszStaticHandler::<ExecutionPayloadHeaderDeneb<MainnetEthSpec>, MainnetEthSpec>
+            ::deneb_only().run();
+        SszStaticHandler::<ExecutionPayloadHeaderElectra<MinimalEthSpec>, MinimalEthSpec>
+            ::electra_only().run();
+        SszStaticHandler::<ExecutionPayloadHeaderElectra<MainnetEthSpec>, MainnetEthSpec>
+            ::electra_only().run();
     }
 
     #[test]
     fn withdrawal() {
-        SszStaticHandler::<Withdrawal, MinimalEthSpec>::capella_only().run();
-        SszStaticHandler::<Withdrawal, MainnetEthSpec>::capella_only().run();
+        SszStaticHandler::<Withdrawal, MinimalEthSpec>::capella_and_later().run();
+        SszStaticHandler::<Withdrawal, MainnetEthSpec>::capella_and_later().run();
     }
 
     #[test]
     fn bls_to_execution_change() {
-        SszStaticHandler::<BlsToExecutionChange, MinimalEthSpec>::capella_only().run();
-        SszStaticHandler::<BlsToExecutionChange, MainnetEthSpec>::capella_only().run();
+        SszStaticHandler::<BlsToExecutionChange, MinimalEthSpec>::capella_and_later().run();
+        SszStaticHandler::<BlsToExecutionChange, MainnetEthSpec>::capella_and_later().run();
     }
 
     #[test]
     fn signed_bls_to_execution_change() {
-        SszStaticHandler::<SignedBlsToExecutionChange, MinimalEthSpec>::capella_only().run();
-        SszStaticHandler::<SignedBlsToExecutionChange, MainnetEthSpec>::capella_only().run();
+        SszStaticHandler::<SignedBlsToExecutionChange, MinimalEthSpec>::capella_and_later().run();
+        SszStaticHandler::<SignedBlsToExecutionChange, MainnetEthSpec>::capella_and_later().run();
+    }
+
+    #[test]
+    fn blob_sidecar() {
+        SszStaticHandler::<BlobSidecar<MinimalEthSpec>, MinimalEthSpec>::deneb_and_later().run();
+        SszStaticHandler::<BlobSidecar<MainnetEthSpec>, MainnetEthSpec>::deneb_and_later().run();
+    }
+
+    #[test]
+    fn blob_identifier() {
+        SszStaticHandler::<BlobIdentifier, MinimalEthSpec>::deneb_and_later().run();
+        SszStaticHandler::<BlobIdentifier, MainnetEthSpec>::deneb_and_later().run();
     }
 
     #[test]
     fn historical_summary() {
-        SszStaticHandler::<HistoricalSummary, MinimalEthSpec>::capella_only().run();
-        SszStaticHandler::<HistoricalSummary, MainnetEthSpec>::capella_only().run();
+        SszStaticHandler::<HistoricalSummary, MinimalEthSpec>::capella_and_later().run();
+        SszStaticHandler::<HistoricalSummary, MainnetEthSpec>::capella_and_later().run();
+    }
+
+    #[test]
+    fn data_column_sidecar() {
+        SszStaticHandler::<DataColumnSidecar<MinimalEthSpec>, MinimalEthSpec>::deneb_only()
+            .run_for_feature(ForkName::Deneb, FeatureName::Eip7594);
+        SszStaticHandler::<DataColumnSidecar<MainnetEthSpec>, MainnetEthSpec>::deneb_only()
+            .run_for_feature(ForkName::Deneb, FeatureName::Eip7594);
+    }
+
+    #[test]
+    fn data_column_identifier() {
+        SszStaticHandler::<DataColumnIdentifier, MinimalEthSpec>::deneb_only()
+            .run_for_feature(ForkName::Deneb, FeatureName::Eip7594);
+        SszStaticHandler::<DataColumnIdentifier, MainnetEthSpec>::deneb_only()
+            .run_for_feature(ForkName::Deneb, FeatureName::Eip7594);
+    }
+
+    #[test]
+    fn consolidation() {
+        SszStaticHandler::<ConsolidationRequest, MinimalEthSpec>::electra_and_later().run();
+        SszStaticHandler::<ConsolidationRequest, MainnetEthSpec>::electra_and_later().run();
+    }
+
+    #[test]
+    fn deposit_request() {
+        SszStaticHandler::<DepositRequest, MinimalEthSpec>::electra_and_later().run();
+        SszStaticHandler::<DepositRequest, MainnetEthSpec>::electra_and_later().run();
+    }
+
+    #[test]
+    fn withdrawal_request() {
+        SszStaticHandler::<WithdrawalRequest, MinimalEthSpec>::electra_and_later().run();
+        SszStaticHandler::<WithdrawalRequest, MainnetEthSpec>::electra_and_later().run();
+    }
+
+    #[test]
+    fn pending_balance_deposit() {
+        SszStaticHandler::<PendingBalanceDeposit, MinimalEthSpec>::electra_and_later().run();
+        SszStaticHandler::<PendingBalanceDeposit, MainnetEthSpec>::electra_and_later().run();
+    }
+
+    #[test]
+    fn pending_consolidation() {
+        SszStaticHandler::<PendingConsolidation, MinimalEthSpec>::electra_and_later().run();
+        SszStaticHandler::<PendingConsolidation, MainnetEthSpec>::electra_and_later().run();
+    }
+
+    #[test]
+    fn pending_partial_withdrawal() {
+        SszStaticHandler::<PendingPartialWithdrawal, MinimalEthSpec>::electra_and_later().run();
+        SszStaticHandler::<PendingPartialWithdrawal, MainnetEthSpec>::electra_and_later().run();
+    }
+
+    #[test]
+    fn execution_requests() {
+        SszStaticHandler::<ExecutionRequests<MainnetEthSpec>, MainnetEthSpec>::electra_and_later()
+            .run();
+        SszStaticHandler::<ExecutionRequests<MinimalEthSpec>, MinimalEthSpec>::electra_and_later()
+            .run();
     }
 }
 
@@ -404,6 +724,18 @@ fn epoch_processing_slashings() {
 fn epoch_processing_eth1_data_reset() {
     EpochProcessingHandler::<MinimalEthSpec, Eth1DataReset>::default().run();
     EpochProcessingHandler::<MainnetEthSpec, Eth1DataReset>::default().run();
+}
+
+#[test]
+fn epoch_processing_pending_balance_deposits() {
+    EpochProcessingHandler::<MinimalEthSpec, PendingBalanceDeposits>::default().run();
+    EpochProcessingHandler::<MainnetEthSpec, PendingBalanceDeposits>::default().run();
+}
+
+#[test]
+fn epoch_processing_pending_consolidations() {
+    EpochProcessingHandler::<MinimalEthSpec, PendingConsolidations>::default().run();
+    EpochProcessingHandler::<MainnetEthSpec, PendingConsolidations>::default().run();
 }
 
 #[test]
@@ -492,12 +824,6 @@ fn fork_choice_on_block() {
 }
 
 #[test]
-fn fork_choice_on_merge_block() {
-    ForkChoiceHandler::<MinimalEthSpec>::new("on_merge_block").run();
-    ForkChoiceHandler::<MainnetEthSpec>::new("on_merge_block").run();
-}
-
-#[test]
 fn fork_choice_ex_ante() {
     ForkChoiceHandler::<MinimalEthSpec>::new("ex_ante").run();
     ForkChoiceHandler::<MainnetEthSpec>::new("ex_ante").run();
@@ -513,6 +839,18 @@ fn fork_choice_reorg() {
 fn fork_choice_withholding() {
     ForkChoiceHandler::<MinimalEthSpec>::new("withholding").run();
     // There is no mainnet variant for this test.
+}
+
+#[test]
+fn fork_choice_should_override_forkchoice_update() {
+    ForkChoiceHandler::<MinimalEthSpec>::new("should_override_forkchoice_update").run();
+    ForkChoiceHandler::<MainnetEthSpec>::new("should_override_forkchoice_update").run();
+}
+
+#[test]
+fn fork_choice_get_proposer_head() {
+    ForkChoiceHandler::<MinimalEthSpec>::new("get_proposer_head").run();
+    ForkChoiceHandler::<MainnetEthSpec>::new("get_proposer_head").run();
 }
 
 #[test]
@@ -533,8 +871,73 @@ fn genesis_validity() {
 }
 
 #[test]
-fn merkle_proof_validity() {
-    MerkleProofValidityHandler::<MainnetEthSpec>::default().run();
+fn kzg_blob_to_kzg_commitment() {
+    KZGBlobToKZGCommitmentHandler::<MainnetEthSpec>::default().run();
+}
+
+#[test]
+fn kzg_compute_blob_kzg_proof() {
+    KZGComputeBlobKZGProofHandler::<MainnetEthSpec>::default().run();
+}
+
+#[test]
+fn kzg_compute_kzg_proof() {
+    KZGComputeKZGProofHandler::<MainnetEthSpec>::default().run();
+}
+
+#[test]
+fn kzg_verify_blob_kzg_proof() {
+    KZGVerifyBlobKZGProofHandler::<MainnetEthSpec>::default().run();
+}
+
+#[test]
+fn kzg_verify_blob_kzg_proof_batch() {
+    KZGVerifyBlobKZGProofBatchHandler::<MainnetEthSpec>::default().run();
+}
+
+#[test]
+fn kzg_verify_kzg_proof() {
+    KZGVerifyKZGProofHandler::<MainnetEthSpec>::default().run();
+}
+
+#[test]
+fn kzg_compute_cells_and_proofs() {
+    KZGComputeCellsAndKZGProofHandler::<MainnetEthSpec>::default()
+        .run_for_feature(ForkName::Deneb, FeatureName::Eip7594);
+}
+
+#[test]
+fn kzg_verify_cell_proof_batch() {
+    KZGVerifyCellKZGProofBatchHandler::<MainnetEthSpec>::default()
+        .run_for_feature(ForkName::Deneb, FeatureName::Eip7594);
+}
+
+#[test]
+fn kzg_recover_cells_and_proofs() {
+    KZGRecoverCellsAndKZGProofHandler::<MainnetEthSpec>::default()
+        .run_for_feature(ForkName::Deneb, FeatureName::Eip7594);
+}
+
+#[test]
+fn beacon_state_merkle_proof_validity() {
+    BeaconStateMerkleProofValidityHandler::<MainnetEthSpec>::default().run();
+}
+
+#[test]
+fn beacon_block_body_merkle_proof_validity() {
+    BeaconBlockBodyMerkleProofValidityHandler::<MainnetEthSpec>::default().run();
+}
+
+#[test]
+fn light_client_update() {
+    LightClientUpdateHandler::<MinimalEthSpec>::default().run();
+}
+
+#[test]
+#[cfg(feature = "fake_crypto")]
+fn kzg_inclusion_merkle_proof_validity() {
+    KzgInclusionMerkleProofValidityHandler::<MainnetEthSpec>::default().run();
+    KzgInclusionMerkleProofValidityHandler::<MinimalEthSpec>::default().run();
 }
 
 #[test]
@@ -543,4 +946,12 @@ fn rewards() {
         RewardsHandler::<MinimalEthSpec>::new(handler).run();
         RewardsHandler::<MainnetEthSpec>::new(handler).run();
     }
+}
+
+#[test]
+fn get_custody_columns() {
+    GetCustodyColumnsHandler::<MainnetEthSpec>::default()
+        .run_for_feature(ForkName::Deneb, FeatureName::Eip7594);
+    GetCustodyColumnsHandler::<MinimalEthSpec>::default()
+        .run_for_feature(ForkName::Deneb, FeatureName::Eip7594);
 }

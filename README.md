@@ -10,7 +10,7 @@ An open-source Ethereum consensus client, written in Rust and maintained by Sigm
 [Book Link]: https://lighthouse-book.sigmaprime.io
 [stable]: https://github.com/sigp/lighthouse/tree/stable
 [unstable]: https://github.com/sigp/lighthouse/tree/unstable
-[blog]: https://lighthouse.sigmaprime.io
+[blog]: https://lighthouse-blog.sigmaprime.io
 
 [Documentation](https://lighthouse-book.sigmaprime.io)
 
@@ -41,7 +41,7 @@ as the canonical staking deposit contract address.
 The [Lighthouse Book](https://lighthouse-book.sigmaprime.io) contains information for users and
 developers.
 
-The Lighthouse team maintains a blog at [lighthouse-blog.sigmaprime.io][blog] which contains periodical
+The Lighthouse team maintains a blog at [https://blog.sigmaprime.io/tag/lighthouse][blog] which contains periodic
 progress updates, roadmap insights and interesting findings.
 
 ## Branches

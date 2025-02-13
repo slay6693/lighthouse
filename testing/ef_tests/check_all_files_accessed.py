@@ -25,26 +25,18 @@ excluded_paths = [
     # Intentionally omitted, as per https://github.com/sigp/lighthouse/issues/1835
     "tests/.*/.*/ssz_static/Eth1Block/",
     "tests/.*/.*/ssz_static/PowBlock/",
+    # We no longer implement merge logic.
+    "tests/.*/bellatrix/fork_choice/on_merge_block",
     # light_client
-    "tests/.*/.*/light_client",
+    "tests/.*/.*/light_client/single_merkle_proof",
+    "tests/.*/.*/light_client/sync",
+    "tests/.*/electra/light_client/update_ranking",
     # LightClientStore
     "tests/.*/.*/ssz_static/LightClientStore",
-    # LightClientUpdate
-    "tests/.*/.*/ssz_static/LightClientUpdate",
     # LightClientSnapshot
     "tests/.*/.*/ssz_static/LightClientSnapshot",
-    # LightClientBootstrap
-    "tests/.*/.*/ssz_static/LightClientBootstrap",
-    # LightClientOptimistic
-    "tests/.*/.*/ssz_static/LightClientOptimistic",
-    # LightClientFinalityUpdate
-    "tests/.*/.*/ssz_static/LightClientFinalityUpdate",
-    # LightClientHeader
-    "tests/.*/.*/ssz_static/LightClientHeader",
-    # Deneb (previously known as eip4844) tests are disabled for now.
-    "tests/.*/deneb",
     # One of the EF researchers likes to pack the tarballs on a Mac
-    ".*\.DS_Store.*",
+    ".*\\.DS_Store.*",
     # More Mac weirdness.
     "tests/mainnet/bellatrix/operations/deposit/pyspec_tests/deposit_with_previous_fork_version__valid_ineffective/._meta.yaml",
     # bls tests are moved to bls12-381-tests directory
@@ -52,7 +44,10 @@ excluded_paths = [
     # some bls tests are not included now
     "bls12-381-tests/deserialization_G1",
     "bls12-381-tests/deserialization_G2",
-    "bls12-381-tests/hash_to_G2"
+    "bls12-381-tests/hash_to_G2",
+    "tests/.*/eip6110",
+    "tests/.*/whisk",
+    "tests/.*/eip7594",
 ]
 
 

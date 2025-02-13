@@ -1,17 +1,22 @@
 use crate::{ChainSpec, Epoch};
-use serde_derive::{Deserialize, Serialize};
-use std::convert::TryFrom;
+use serde::{Deserialize, Serialize};
+use ssz_derive::{Decode, Encode};
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Decode, Encode, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(try_from = "String")]
 #[serde(into = "String")]
+#[ssz(enum_behaviour = "tag")]
 pub enum ForkName {
     Base,
     Altair,
-    Merge,
+    Bellatrix,
     Capella,
+    Deneb,
+    Electra,
 }
 
 impl ForkName {
@@ -19,9 +24,26 @@ impl ForkName {
         vec![
             ForkName::Base,
             ForkName::Altair,
-            ForkName::Merge,
+            ForkName::Bellatrix,
             ForkName::Capella,
+            ForkName::Deneb,
+            ForkName::Electra,
         ]
+    }
+
+    pub fn list_all_fork_epochs(spec: &ChainSpec) -> Vec<(ForkName, Option<Epoch>)> {
+        vec![
+            (ForkName::Altair, spec.altair_fork_epoch),
+            (ForkName::Bellatrix, spec.bellatrix_fork_epoch),
+            (ForkName::Capella, spec.capella_fork_epoch),
+            (ForkName::Deneb, spec.deneb_fork_epoch),
+            (ForkName::Electra, spec.electra_fork_epoch),
+        ]
+    }
+
+    pub fn latest() -> ForkName {
+        // This unwrap is safe as long as we have 1+ forks. It is tested below.
+        *ForkName::list_all().last().unwrap()
     }
 
     /// Set the activation slots in the given `ChainSpec` so that the fork named by `self`
@@ -33,24 +55,48 @@ impl ForkName {
                 spec.altair_fork_epoch = None;
                 spec.bellatrix_fork_epoch = None;
                 spec.capella_fork_epoch = None;
+                spec.deneb_fork_epoch = None;
+                spec.electra_fork_epoch = None;
                 spec
             }
             ForkName::Altair => {
                 spec.altair_fork_epoch = Some(Epoch::new(0));
                 spec.bellatrix_fork_epoch = None;
                 spec.capella_fork_epoch = None;
+                spec.deneb_fork_epoch = None;
+                spec.electra_fork_epoch = None;
                 spec
             }
-            ForkName::Merge => {
+            ForkName::Bellatrix => {
                 spec.altair_fork_epoch = Some(Epoch::new(0));
                 spec.bellatrix_fork_epoch = Some(Epoch::new(0));
                 spec.capella_fork_epoch = None;
+                spec.deneb_fork_epoch = None;
+                spec.electra_fork_epoch = None;
                 spec
             }
             ForkName::Capella => {
                 spec.altair_fork_epoch = Some(Epoch::new(0));
                 spec.bellatrix_fork_epoch = Some(Epoch::new(0));
                 spec.capella_fork_epoch = Some(Epoch::new(0));
+                spec.deneb_fork_epoch = None;
+                spec.electra_fork_epoch = None;
+                spec
+            }
+            ForkName::Deneb => {
+                spec.altair_fork_epoch = Some(Epoch::new(0));
+                spec.bellatrix_fork_epoch = Some(Epoch::new(0));
+                spec.capella_fork_epoch = Some(Epoch::new(0));
+                spec.deneb_fork_epoch = Some(Epoch::new(0));
+                spec.electra_fork_epoch = None;
+                spec
+            }
+            ForkName::Electra => {
+                spec.altair_fork_epoch = Some(Epoch::new(0));
+                spec.bellatrix_fork_epoch = Some(Epoch::new(0));
+                spec.capella_fork_epoch = Some(Epoch::new(0));
+                spec.deneb_fork_epoch = Some(Epoch::new(0));
+                spec.electra_fork_epoch = Some(Epoch::new(0));
                 spec
             }
         }
@@ -63,8 +109,10 @@ impl ForkName {
         match self {
             ForkName::Base => None,
             ForkName::Altair => Some(ForkName::Base),
-            ForkName::Merge => Some(ForkName::Altair),
-            ForkName::Capella => Some(ForkName::Merge),
+            ForkName::Bellatrix => Some(ForkName::Altair),
+            ForkName::Capella => Some(ForkName::Bellatrix),
+            ForkName::Deneb => Some(ForkName::Capella),
+            ForkName::Electra => Some(ForkName::Deneb),
         }
     }
 
@@ -74,10 +122,32 @@ impl ForkName {
     pub fn next_fork(self) -> Option<ForkName> {
         match self {
             ForkName::Base => Some(ForkName::Altair),
-            ForkName::Altair => Some(ForkName::Merge),
-            ForkName::Merge => Some(ForkName::Capella),
-            ForkName::Capella => None,
+            ForkName::Altair => Some(ForkName::Bellatrix),
+            ForkName::Bellatrix => Some(ForkName::Capella),
+            ForkName::Capella => Some(ForkName::Deneb),
+            ForkName::Deneb => Some(ForkName::Electra),
+            ForkName::Electra => None,
         }
+    }
+
+    pub fn altair_enabled(self) -> bool {
+        self >= ForkName::Altair
+    }
+
+    pub fn bellatrix_enabled(self) -> bool {
+        self >= ForkName::Bellatrix
+    }
+
+    pub fn capella_enabled(self) -> bool {
+        self >= ForkName::Capella
+    }
+
+    pub fn deneb_enabled(self) -> bool {
+        self >= ForkName::Deneb
+    }
+
+    pub fn electra_enabled(self) -> bool {
+        self >= ForkName::Electra
     }
 }
 
@@ -114,13 +184,21 @@ macro_rules! map_fork_name_with {
                 let (value, extra_data) = $body;
                 ($t::Altair(value), extra_data)
             }
-            ForkName::Merge => {
+            ForkName::Bellatrix => {
                 let (value, extra_data) = $body;
-                ($t::Merge(value), extra_data)
+                ($t::Bellatrix(value), extra_data)
             }
             ForkName::Capella => {
                 let (value, extra_data) = $body;
                 ($t::Capella(value), extra_data)
+            }
+            ForkName::Deneb => {
+                let (value, extra_data) = $body;
+                ($t::Deneb(value), extra_data)
+            }
+            ForkName::Electra => {
+                let (value, extra_data) = $body;
+                ($t::Electra(value), extra_data)
             }
         }
     };
@@ -133,8 +211,10 @@ impl FromStr for ForkName {
         Ok(match fork_name.to_lowercase().as_ref() {
             "phase0" | "base" => ForkName::Base,
             "altair" => ForkName::Altair,
-            "bellatrix" | "merge" => ForkName::Merge,
+            "bellatrix" | "merge" => ForkName::Bellatrix,
             "capella" => ForkName::Capella,
+            "deneb" => ForkName::Deneb,
+            "electra" => ForkName::Electra,
             _ => return Err(format!("unknown fork name: {}", fork_name)),
         })
     }
@@ -145,8 +225,10 @@ impl Display for ForkName {
         match self {
             ForkName::Base => "phase0".fmt(f),
             ForkName::Altair => "altair".fmt(f),
-            ForkName::Merge => "bellatrix".fmt(f),
+            ForkName::Bellatrix => "bellatrix".fmt(f),
             ForkName::Capella => "capella".fmt(f),
+            ForkName::Deneb => "deneb".fmt(f),
+            ForkName::Electra => "electra".fmt(f),
         }
     }
 }
@@ -178,7 +260,7 @@ mod test {
 
     #[test]
     fn previous_and_next_fork_consistent() {
-        assert_eq!(ForkName::Capella.next_fork(), None);
+        assert_eq!(ForkName::latest().next_fork(), None);
         assert_eq!(ForkName::Base.previous_fork(), None);
 
         for (prev_fork, fork) in ForkName::list_all().into_iter().tuple_windows() {
@@ -207,8 +289,28 @@ mod test {
 
     #[test]
     fn fork_name_bellatrix_or_merge() {
-        assert_eq!(ForkName::from_str("bellatrix"), Ok(ForkName::Merge));
-        assert_eq!(ForkName::from_str("merge"), Ok(ForkName::Merge));
-        assert_eq!(ForkName::Merge.to_string(), "bellatrix");
+        assert_eq!(ForkName::from_str("bellatrix"), Ok(ForkName::Bellatrix));
+        assert_eq!(ForkName::from_str("merge"), Ok(ForkName::Bellatrix));
+        assert_eq!(ForkName::Bellatrix.to_string(), "bellatrix");
+    }
+
+    #[test]
+    fn fork_name_latest() {
+        assert_eq!(ForkName::latest(), *ForkName::list_all().last().unwrap());
+
+        let mut fork = ForkName::Base;
+        while let Some(next_fork) = fork.next_fork() {
+            fork = next_fork;
+        }
+        assert_eq!(ForkName::latest(), fork);
+    }
+
+    #[test]
+    fn fork_ord_consistent() {
+        for (prev_fork, fork) in ForkName::list_all().into_iter().tuple_windows() {
+            assert_eq!(prev_fork.next_fork(), Some(fork));
+            assert_eq!(fork.previous_fork(), Some(prev_fork));
+            assert!(prev_fork < fork);
+        }
     }
 }

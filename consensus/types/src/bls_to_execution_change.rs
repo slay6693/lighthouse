@@ -1,7 +1,6 @@
 use crate::test_utils::TestRandom;
 use crate::*;
-use bls::PublicKeyBytes;
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use test_random_derive::TestRandom;
 use tree_hash_derive::TreeHash;
@@ -21,9 +20,10 @@ use tree_hash_derive::TreeHash;
     TestRandom,
 )]
 pub struct BlsToExecutionChange {
-    #[serde(with = "eth2_serde_utils::quoted_u64")]
+    #[serde(with = "serde_utils::quoted_u64")]
     pub validator_index: u64,
     pub from_bls_pubkey: PublicKeyBytes,
+    #[serde(with = "serde_utils::address_hex")]
     pub to_execution_address: Address,
 }
 

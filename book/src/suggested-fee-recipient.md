@@ -1,24 +1,22 @@
 # Suggested Fee Recipient
 
 The _fee recipient_ is an Ethereum address nominated by a beacon chain validator to receive
-tips from user transactions. If you run validators on a network that has already merged
-or is due to merge soon then you should nominate a fee recipient for your validators.
+tips from user transactions. Given that all mainnet and testnets have gone through [The Merge](https://ethereum.org/en/roadmap/merge/), if you run validators on a network, you are strongly recommended to nominate a fee recipient for your validators. Failing to nominate a fee recipient will result in losing the tips from transactions.
 
 ## Background
 
 During post-merge block production, the Beacon Node (BN) will provide a `suggested_fee_recipient` to
-the execution node. This is a 20-byte Ethereum address which the EL might choose to set as the
-coinbase and the recipient of other fees or rewards.
+the execution node. This is a 20-byte Ethereum address which the execution node might choose to set as the recipient of other fees or rewards.
 
 There is no guarantee that an execution node will use the `suggested_fee_recipient` to collect fees,
-it may use any address it chooses. It is assumed that an honest execution node *will* use the
-`suggested_fee_recipient`, but users should note this trust assumption. 
+it may use any address it chooses. It is assumed that an honest execution node _will_ use the
+`suggested_fee_recipient`, but users should note this trust assumption.
 
 The `suggested_fee_recipient` can be provided to the VC, which will transmit it to the BN. The BN also
 has a choice regarding the fee recipient it passes to the execution node, creating another
 noteworthy trust assumption.
 
-To be sure *you* control your fee recipient value, run your own BN and execution node (don't use
+To be sure _you_ control your fee recipient value, run your own BN and execution node (don't use
 third-party services).
 
 ## How to configure a suggested fee recipient
@@ -70,7 +68,6 @@ Provide a 0x-prefixed address, e.g.
 lighthouse vc --suggested-fee-recipient 0x25c4a76E7d118705e7Ea2e9b7d8C59930d8aCD3b ...
 ```
 
-
 ### 3. Using the "--suggested-fee-recipient" flag on the beacon node
 
 The `--suggested-fee-recipient` can be provided to the BN to act as a default value when the
@@ -98,12 +95,15 @@ client.
 | Required Headers  | [`Authorization`](./api-vc-auth-header.md) |
 | Typical Responses | 202, 404                                   |
 
-#### Example Request Body
+### Example Request Body
+
 ```json
 {
     "ethaddress": "0x1D4E51167DBDC4789a014357f4029ff76381b16c"
 }
 ```
+
+Command:
 
 ```bash
 DATADIR=$HOME/.lighthouse/mainnet
@@ -117,10 +117,15 @@ curl -X POST \
     http://localhost:5062/eth/v1/validator/${PUBKEY}/feerecipient | jq
 ```
 
+Note that an authorization header is required to interact with the API. This is specified with the header `-H "Authorization: Bearer $(cat ${DATADIR}/validators/api-token.txt)"` which read the API token to supply the authentication. Refer to [Authorization Header](./api-vc-auth-header.md) for more information. If you are having permission issue with accessing the API token file, you can modify the header to become `-H "Authorization: Bearer $(sudo cat ${DATADIR}/validators/api-token.txt)"`.
+
 #### Successful Response (202)
+
 ```json
 null
 ```
+
+A `null` response indicates that the request is successful.
 
 ### Querying the fee recipient
 
@@ -133,6 +138,8 @@ The same path with a `GET` request can be used to query the fee recipient for a 
 | Required Headers  | [`Authorization`](./api-vc-auth-header.md) |
 | Typical Responses | 200, 404                                   |
 
+Command:
+
 ```bash
 DATADIR=$HOME/.lighthouse/mainnet
 PUBKEY=0xa9735061c84fc0003657e5bd38160762b7ef2d67d280e00347b1781570088c32c06f15418c144949f5d736b1d3a6c591
@@ -144,6 +151,7 @@ curl -X GET \
 ```
 
 #### Successful Response (200)
+
 ```json
 {
   "data": {
@@ -165,6 +173,8 @@ This is useful if you want the fee recipient to fall back to the validator clien
 | Required Headers  | [`Authorization`](./api-vc-auth-header.md) |
 | Typical Responses | 204, 404                                   |
 
+Command:
+
 ```bash
 DATADIR=$HOME/.lighthouse/mainnet
 PUBKEY=0xa9735061c84fc0003657e5bd38160762b7ef2d67d280e00347b1781570088c32c06f15418c144949f5d736b1d3a6c591
@@ -176,6 +186,7 @@ curl -X DELETE \
 ```
 
 #### Successful Response (204)
+
 ```json
 null
 ```
@@ -189,4 +200,4 @@ accumulates other staking rewards. The reason for this is that transaction fees 
 validated by the execution node, and therefore need to be paid to an address that exists on the
 execution chain. Validators use BLS keys which do not correspond to Ethereum addresses, so they
 have no "presence" on the execution chain. Therefore, it's necessary for each validator to nominate
-a separate fee recipient address.
+a fee recipient address.

@@ -1,11 +1,10 @@
 use derivative::Derivative;
 use smallvec::{smallvec, SmallVec};
-use ssz::{Decode, Encode};
-use state_processing::{SigVerifiedOp, VerifyOperation};
+use state_processing::{SigVerifiedOp, TransformPersist, VerifyOperation, VerifyOperationAt};
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use types::{
-    AttesterSlashing, BeaconState, ChainSpec, EthSpec, ForkName, ProposerSlashing,
+    AttesterSlashing, BeaconState, ChainSpec, Epoch, EthSpec, ForkName, ProposerSlashing,
     SignedBlsToExecutionChange, SignedVoluntaryExit, Slot,
 };
 
@@ -34,7 +33,7 @@ pub struct ObservedOperations<T: ObservableOperation<E>, E: EthSpec> {
 
 /// Was the observed operation new and valid for further processing, or a useless duplicate?
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ObservationOutcome<T: Encode + Decode, E: EthSpec> {
+pub enum ObservationOutcome<T: TransformPersist, E: EthSpec> {
     New(SigVerifiedOp<T, E>),
     AlreadyKnown,
 }
@@ -62,15 +61,13 @@ impl<E: EthSpec> ObservableOperation<E> for ProposerSlashing {
 impl<E: EthSpec> ObservableOperation<E> for AttesterSlashing<E> {
     fn observed_validators(&self) -> SmallVec<[u64; SMALL_VEC_SIZE]> {
         let attestation_1_indices = self
-            .attestation_1
-            .attesting_indices
-            .iter()
+            .attestation_1()
+            .attesting_indices_iter()
             .copied()
             .collect::<HashSet<u64>>();
         let attestation_2_indices = self
-            .attestation_2
-            .attesting_indices
-            .iter()
+            .attestation_2()
+            .attesting_indices_iter()
             .copied()
             .collect::<HashSet<u64>>();
         attestation_1_indices
@@ -87,12 +84,16 @@ impl<E: EthSpec> ObservableOperation<E> for SignedBlsToExecutionChange {
 }
 
 impl<T: ObservableOperation<E>, E: EthSpec> ObservedOperations<T, E> {
-    pub fn verify_and_observe(
+    pub fn verify_and_observe_parametric<F>(
         &mut self,
         op: T,
+        validate: F,
         head_state: &BeaconState<E>,
         spec: &ChainSpec,
-    ) -> Result<ObservationOutcome<T, E>, T::Error> {
+    ) -> Result<ObservationOutcome<T, E>, T::Error>
+    where
+        F: Fn(T) -> Result<SigVerifiedOp<T, E>, T::Error>,
+    {
         self.reset_at_fork_boundary(head_state.slot(), spec);
 
         let observed_validator_indices = &mut self.observed_validator_indices;
@@ -112,13 +113,23 @@ impl<T: ObservableOperation<E>, E: EthSpec> ObservedOperations<T, E> {
         }
 
         // Validate the op using operation-specific logic (`verify_attester_slashing`, etc).
-        let verified_op = op.validate(head_state, spec)?;
+        let verified_op = validate(op)?;
 
         // Add the relevant indices to the set of known indices to prevent processing of duplicates
         // in the future.
         observed_validator_indices.extend(new_validator_indices);
 
         Ok(ObservationOutcome::New(verified_op))
+    }
+
+    pub fn verify_and_observe(
+        &mut self,
+        op: T,
+        head_state: &BeaconState<E>,
+        spec: &ChainSpec,
+    ) -> Result<ObservationOutcome<T, E>, T::Error> {
+        let validate = |op: T| op.validate(head_state, spec);
+        self.verify_and_observe_parametric(op, validate, head_state, spec)
     }
 
     /// Reset the cache when crossing a fork boundary.
@@ -138,5 +149,23 @@ impl<T: ObservableOperation<E>, E: EthSpec> ObservedOperations<T, E> {
             self.observed_validator_indices.clear();
             self.current_fork = head_fork;
         }
+    }
+
+    /// Reset the cache. MUST ONLY BE USED IN TESTS.
+    pub fn __reset_for_testing_only(&mut self) {
+        self.observed_validator_indices.clear();
+    }
+}
+
+impl<T: ObservableOperation<E> + VerifyOperationAt<E>, E: EthSpec> ObservedOperations<T, E> {
+    pub fn verify_and_observe_at(
+        &mut self,
+        op: T,
+        verify_at_epoch: Epoch,
+        head_state: &BeaconState<E>,
+        spec: &ChainSpec,
+    ) -> Result<ObservationOutcome<T, E>, T::Error> {
+        let validate = |op: T| op.validate_at(head_state, verify_at_epoch, spec);
+        self.verify_and_observe_parametric(op, validate, head_state, spec)
     }
 }

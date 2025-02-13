@@ -66,14 +66,18 @@ use beacon_chain::{
 };
 use clap::ArgMatches;
 use clap_utils::{parse_optional, parse_required};
-use environment::{null_logger, Environment};
+use environment::Environment;
 use eth2::{
     types::{BlockId, StateId},
     BeaconNodeHttpClient, SensitiveUrl, Timeouts,
 };
+use eth2_network_config::Eth2NetworkConfig;
+use log::{debug, info};
+use sloggers::{null::NullLoggerBuilder, Build};
 use ssz::Encode;
+use state_processing::state_advance::complete_state_advance;
 use state_processing::{
-    block_signature_verifier::BlockSignatureVerifier, per_block_processing, per_slot_processing,
+    block_signature_verifier::BlockSignatureVerifier, per_block_processing, AllCaches,
     BlockSignatureStrategy, ConsensusContext, VerifyBlockRoot,
 };
 use std::borrow::Cow;
@@ -83,7 +87,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use store::HotColdDB;
-use types::{BeaconState, ChainSpec, CloneConfig, EthSpec, Hash256, SignedBeaconBlock};
+use types::{BeaconState, ChainSpec, EthSpec, Hash256, SignedBeaconBlock};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -94,8 +98,12 @@ struct Config {
     exclude_post_block_thc: bool,
 }
 
-pub fn run<T: EthSpec>(env: Environment<T>, matches: &ArgMatches) -> Result<(), String> {
-    let spec = &T::default_spec();
+pub fn run<E: EthSpec>(
+    env: Environment<E>,
+    network_config: Eth2NetworkConfig,
+    matches: &ArgMatches,
+) -> Result<(), String> {
+    let spec = Arc::new(network_config.chain_spec::<E>()?);
     let executor = env.core_context().executor;
 
     /*
@@ -111,12 +119,12 @@ pub fn run<T: EthSpec>(env: Environment<T>, matches: &ArgMatches) -> Result<(), 
     let beacon_url: Option<SensitiveUrl> = parse_optional(matches, "beacon-url")?;
     let runs: usize = parse_required(matches, "runs")?;
     let config = Config {
-        no_signature_verification: matches.is_present("no-signature-verification"),
-        exclude_cache_builds: matches.is_present("exclude-cache-builds"),
-        exclude_post_block_thc: matches.is_present("exclude-post-block-thc"),
+        no_signature_verification: matches.get_flag("no-signature-verification"),
+        exclude_cache_builds: matches.get_flag("exclude-cache-builds"),
+        exclude_post_block_thc: matches.get_flag("exclude-post-block-thc"),
     };
 
-    info!("Using {} spec", T::spec_name());
+    info!("Using {} spec", E::spec_name());
     info!("Doing {} runs", runs);
     info!("{:?}", &config);
 
@@ -129,13 +137,15 @@ pub fn run<T: EthSpec>(env: Environment<T>, matches: &ArgMatches) -> Result<(), 
         (Some(pre_state_path), Some(block_path), None) => {
             info!("Block path: {:?}", block_path);
             info!("Pre-state path: {:?}", pre_state_path);
-            let pre_state = load_from_ssz_with(&pre_state_path, spec, BeaconState::from_ssz_bytes)?;
-            let block = load_from_ssz_with(&block_path, spec, SignedBeaconBlock::from_ssz_bytes)?;
+            let pre_state =
+                load_from_ssz_with(&pre_state_path, &spec, BeaconState::from_ssz_bytes)?;
+            let block = load_from_ssz_with(&block_path, &spec, SignedBeaconBlock::from_ssz_bytes)?;
             (pre_state, None, block)
         }
         (None, None, Some(beacon_url)) => {
             let block_id: BlockId = parse_required(matches, "block-id")?;
             let client = BeaconNodeHttpClient::new(beacon_url, Timeouts::set_all(HTTP_TIMEOUT));
+            let inner_spec = spec.clone();
             executor
                 .handle()
                 .ok_or("shutdown in progress")?
@@ -147,11 +157,11 @@ pub fn run<T: EthSpec>(env: Environment<T>, matches: &ArgMatches) -> Result<(), 
                         .ok_or_else(|| format!("Unable to locate block at {:?}", block_id))?
                         .data;
 
-                    if block.slot() == spec.genesis_slot {
+                    if block.slot() == inner_spec.genesis_slot {
                         return Err("Cannot run on the genesis block".to_string());
                     }
 
-                    let parent_block: SignedBeaconBlock<T> = client
+                    let parent_block: SignedBeaconBlock<E> = client
                         .get_beacon_blocks(BlockId::Root(block.parent_root()))
                         .await
                         .map_err(|e| format!("Failed to download parent block: {:?}", e))?
@@ -161,7 +171,7 @@ pub fn run<T: EthSpec>(env: Environment<T>, matches: &ArgMatches) -> Result<(), 
                     let state_root = parent_block.state_root();
                     let state_id = StateId::Root(state_root);
                     let pre_state = client
-                        .get_debug_beacon_states::<T>(state_id)
+                        .get_debug_beacon_states::<E>(state_id)
                         .await
                         .map_err(|e| format!("Failed to download state: {:?}", e))?
                         .ok_or_else(|| format!("Unable to locate state at {:?}", state_id))?
@@ -189,7 +199,9 @@ pub fn run<T: EthSpec>(env: Environment<T>, matches: &ArgMatches) -> Result<(), 
     let store = HotColdDB::open_ephemeral(
         <_>::default(),
         spec.clone(),
-        null_logger().map_err(|e| format!("Failed to create null_logger: {:?}", e))?,
+        NullLoggerBuilder
+            .build()
+            .map_err(|e| format!("Error on NullLoggerBuilder: {:?}", e))?,
     )
     .map_err(|e| format!("Failed to create ephemeral store: {:?}", e))?;
     let store = Arc::new(store);
@@ -205,7 +217,7 @@ pub fn run<T: EthSpec>(env: Environment<T>, matches: &ArgMatches) -> Result<(), 
 
     if config.exclude_cache_builds {
         pre_state
-            .build_all_caches(spec)
+            .build_all_caches(&spec)
             .map_err(|e| format!("Unable to build caches: {:?}", e))?;
         let state_root = pre_state
             .update_tree_hash_cache()
@@ -226,8 +238,9 @@ pub fn run<T: EthSpec>(env: Environment<T>, matches: &ArgMatches) -> Result<(), 
      */
 
     let mut output_post_state = None;
+    let mut saved_ctxt = None;
     for i in 0..runs {
-        let pre_state = pre_state.clone_with(CloneConfig::all());
+        let pre_state = pre_state.clone();
         let block = block.clone();
 
         let start = Instant::now();
@@ -239,7 +252,8 @@ pub fn run<T: EthSpec>(env: Environment<T>, matches: &ArgMatches) -> Result<(), 
             state_root_opt,
             &config,
             &validator_pubkey_cache,
-            spec,
+            &mut saved_ctxt,
+            &spec,
         )?;
 
         let duration = Instant::now().duration_since(start);
@@ -288,18 +302,22 @@ pub fn run<T: EthSpec>(env: Environment<T>, matches: &ArgMatches) -> Result<(), 
             .map_err(|e| format!("Unable to write to output file: {:?}", e))?;
     }
 
+    drop(pre_state);
+
     Ok(())
 }
 
-fn do_transition<T: EthSpec>(
-    mut pre_state: BeaconState<T>,
+#[allow(clippy::too_many_arguments)]
+fn do_transition<E: EthSpec>(
+    mut pre_state: BeaconState<E>,
     block_root: Hash256,
-    block: SignedBeaconBlock<T>,
+    block: SignedBeaconBlock<E>,
     mut state_root_opt: Option<Hash256>,
     config: &Config,
-    validator_pubkey_cache: &ValidatorPubkeyCache<EphemeralHarnessType<T>>,
+    validator_pubkey_cache: &ValidatorPubkeyCache<EphemeralHarnessType<E>>,
+    saved_ctxt: &mut Option<ConsensusContext<E>>,
     spec: &ChainSpec,
-) -> Result<BeaconState<T>, String> {
+) -> Result<BeaconState<E>, String> {
     if !config.exclude_cache_builds {
         let t = Instant::now();
         pre_state
@@ -327,11 +345,12 @@ fn do_transition<T: EthSpec>(
 
     // Transition the parent state to the block slot.
     let t = Instant::now();
-    for i in pre_state.slot().as_u64()..block.slot().as_u64() {
-        per_slot_processing(&mut pre_state, Some(state_root), spec)
-            .map_err(|e| format!("Failed to advance slot on iteration {}: {:?}", i, e))?;
-    }
+    complete_state_advance(&mut pre_state, Some(state_root), block.slot(), spec)
+        .map_err(|e| format!("Unable to perform complete advance: {e:?}"))?;
     debug!("Slot processing: {:?}", t.elapsed());
+
+    // Slot and epoch processing should keep the caches fully primed.
+    assert!(pre_state.all_caches_built());
 
     let t = Instant::now();
     pre_state
@@ -339,9 +358,14 @@ fn do_transition<T: EthSpec>(
         .map_err(|e| format!("Unable to build caches: {:?}", e))?;
     debug!("Build all caches (again): {:?}", t.elapsed());
 
-    let mut ctxt = ConsensusContext::new(pre_state.slot())
-        .set_current_block_root(block_root)
-        .set_proposer_index(block.message().proposer_index());
+    let mut ctxt = if let Some(ctxt) = saved_ctxt {
+        ctxt.clone()
+    } else {
+        let ctxt = ConsensusContext::new(pre_state.slot())
+            .set_current_block_root(block_root)
+            .set_proposer_index(block.message().proposer_index());
+        ctxt
+    };
 
     if !config.no_signature_verification {
         let get_pubkey = move |validator_index| {
@@ -372,7 +396,7 @@ fn do_transition<T: EthSpec>(
         // Signature verification should prime the indexed attestation cache.
         assert_eq!(
             ctxt.num_cached_indexed_attestations(),
-            block.message().body().attestations().len()
+            block.message().body().attestations_len()
         );
     }
 

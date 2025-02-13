@@ -3,7 +3,6 @@ use eth2::lighthouse::{
     AttestationPerformance, AttestationPerformanceQuery, AttestationPerformanceStatistics,
 };
 use state_processing::{
-    per_epoch_processing::altair::participation_cache::Error as ParticipationCacheError,
     per_epoch_processing::EpochProcessingSummary, BlockReplayError, BlockReplayer,
 };
 use std::sync::Arc;
@@ -14,11 +13,11 @@ const MAX_REQUEST_RANGE_EPOCHS: usize = 100;
 const BLOCK_ROOT_CHUNK_SIZE: usize = 100;
 
 #[derive(Debug)]
+// We don't use the inner values directly, but they're used in the Debug impl.
 enum AttestationPerformanceError {
-    BlockReplay(BlockReplayError),
-    BeaconState(BeaconStateError),
-    ParticipationCache(ParticipationCacheError),
-    UnableToFindValidator(usize),
+    BlockReplay(#[allow(dead_code)] BlockReplayError),
+    BeaconState(#[allow(dead_code)] BeaconStateError),
+    UnableToFindValidator(#[allow(dead_code)] usize),
 }
 
 impl From<BlockReplayError> for AttestationPerformanceError {
@@ -30,12 +29,6 @@ impl From<BlockReplayError> for AttestationPerformanceError {
 impl From<BeaconStateError> for AttestationPerformanceError {
     fn from(e: BeaconStateError) -> Self {
         Self::BeaconState(e)
-    }
-}
-
-impl From<ParticipationCacheError> for AttestationPerformanceError {
-    fn from(e: ParticipationCacheError) -> Self {
-        Self::ParticipationCache(e)
     }
 }
 
@@ -77,8 +70,8 @@ pub fn get_attestation_performance<T: BeaconChainTypes>(
     // query is within permitted bounds to prevent potential OOM errors.
     if (end_epoch - start_epoch).as_usize() > MAX_REQUEST_RANGE_EPOCHS {
         return Err(custom_bad_request(format!(
-            "end_epoch must not exceed start_epoch by more than 100 epochs. start: {}, end: {}",
-            query.start_epoch, query.end_epoch
+            "end_epoch must not exceed start_epoch by more than {} epochs. start: {}, end: {}",
+            MAX_REQUEST_RANGE_EPOCHS, query.start_epoch, query.end_epoch
         )));
     }
 
